@@ -6,9 +6,11 @@
 
         DOMAIN=<your_moodle_domain>
         TOKEN=<your_moodle_api_token>
+        USERNAME=<your_moodle_username>
+        PASSWORD=<your_moodle_password>
 
 # Usage
 
 Run the Script: Execute the script in your terminal or command prompt:
 
-    python main.py
+    python main.py <lecture_id>

@@ -8,19 +8,37 @@ import hashlib
 
 load_dotenv()
 
+if len(sys.argv) != 2:
+    print("Используйте: python main.py <lecture_id>")
+    sys.exit(1)
 # Проверяем наличие файла .env
 if not path.exists('.env'):
     print("Ошибка: Файл .env не найден.")
     sys.exit(1)
 
 # Проверяем наличие необходимых переменных в .env
-if not all(getenv(key) for key in ('DOMAIN', 'TOKEN')):
-    print("Ошибка: Не все необходимые переменные окружения указаны в файле .env.")
+if not all(getenv(key) for key in ('DOMAIN', 'USERNAME', 'PASSWORD')):
+    print("Ошибка: Не все необходимые переменные окружения указаны в файле .env. (DOMAIN, USERNAME, PASSWORD, TOKEN)")
     sys.exit(1)
 
 domainname = getenv('DOMAIN')
 token = getenv('TOKEN')
+username = getenv('USERNAME')
+password = getenv('PASSWORD')
+
 serverurl = f'{domainname}/webservice/rest/server.php'
+login_url = f'{domainname}/login/index.php'
+
+session = requests.Session()
+print("Получение токена входа...")
+login_page = session.get(login_url)
+login_soup = BeautifulSoup(login_page.content, 'html.parser')
+hidden_inputs = login_soup.find_all("input", type="hidden")
+form_data = {input.get('name'): input.get('value') for input in hidden_inputs}
+form_data['username'] = username
+form_data['password'] = password
+print("Вход в аккаунт...")
+response = session.post(login_url, data=form_data)
 
 def get_lecture(lecture_id: int):
     response = requests.get(serverurl, params={
@@ -51,6 +69,23 @@ def get_lesson_page(lesson_id: int, page_id: int):
     })
     return response.json()
 
+def send_answer(lecture_id: int, page_id: int, sesskey: str, answer: str=None, answerid: int=None):
+    if not answer and not answerid:
+        raise Exception('Neither answer nor answerid provided')
+    data = {
+        'id': lecture_id,
+        'pageid': page_id,
+        'sesskey': sesskey,
+    }
+    if answerid:
+        data['answerid']=answerid
+        data['_qf__lesson_display_answer_form_multichoice_singleanswer']=1
+    else:
+        data['answer']=answer
+        data['_qf__lesson_display_answer_form_shortanswer']=1
+    response = session.post(f"{domainname}/mod/lesson/continue.php",data=data)
+    return response.text
+
 def save_answers(answers):
     with open('answers.json', 'w') as f:
         json.dump(answers, f)
@@ -62,14 +97,25 @@ def load_answers():
     except FileNotFoundError:
         return {}
 
-# Проверяем наличие аргумента с ID лекции
-if len(sys.argv) != 2:
-    print("Используйте: python main.py <lecture_id>")
-    sys.exit(1)
+def get_answer_options(soup) -> list[tuple[int, str]]:
+    answer_options = soup.find_all('div', class_='answeroption')
+    answers = []
+    for option in answer_options:
+        input_tag = option.find('input', class_='form-check-input')
+        answer_id = int(input_tag['value'])
+        label_tag = option.find('label', class_='form-check-label')
+        answer_text = label_tag.get_text(strip=True)
+        answers.append((answer_id, answer_text))
+    return answers
+
+def answer_is_correct(answer_page: str):
+    soup = BeautifulSoup(answer_page, 'html.parser')
+    result = soup.find('div', class_='response')
+    return result.text.strip() if result else result
+
 
 lecture_id = int(sys.argv[1])
 
-# Получаем данные о лекции
 lecture = get_lecture(lecture_id)
 if 'exception' in lecture:
     print("Ошибка получения лекции с сайта:",lecture['message'])
@@ -78,43 +124,68 @@ if 'exception' in lecture:
 if 'cm' in lecture and 'instance' in lecture['cm']:
     lesson_id = lecture['cm']['instance']
     pages = get_lecture_pages(lesson_id)
-
-    if 'pages' in pages and len(pages['pages']) > 0:
+    query_url = f"{domainname}/mod/lesson/view.php?id={lecture_id}&pageid={pages['pages'][0]['page']['id']}&startlastseen=no"
+    response = session.get(query_url, allow_redirects=False)
+    soup = BeautifulSoup(response.text, 'html.parser')
+    sesskey_input = soup.find('input', {'name': 'sesskey'})
+    sesskey = sesskey_input.get('value')
+    page_count = len(pages['pages'])
+    if 'pages' in pages and page_count > 0:
         existing_answers = load_answers()
+        answers_count = 0
+        
         for page in pages['pages']:
             page_id = page['page']['id']
-
             page_details = get_lesson_page(lesson_id, page_id)
             qtype = page_details['page']['qtype']
             if qtype not in (3, 8):
+                response = session.post(f"{domainname}/mod/lesson/view.php",data={
+                    'id': lecture_id,
+                    'pageid': page_id,
+                    'sesskey': sesskey,
+                    'jumpto': -1
+                })
                 continue
-
             soup = BeautifulSoup(page_details['page']['contents'], 'html.parser')
+            soup_pagecontent = BeautifulSoup(page_details['pagecontent'], 'html.parser')
             question = soup.find('div', class_='no-overflow').text.strip()
             print("Вопрос:", question)
             question_hash = hashlib.sha256(question.encode()).hexdigest()
-
+            
             if question_hash in existing_answers:
-                print("Ответ уже существует:", existing_answers[question_hash])
+                if qtype==3:
+                    answers = get_answer_options(soup_pagecontent)
+                    print("Ответ уже существует:", list(filter(lambda option: option[0] == existing_answers[question_hash], answers))[0][1])
+                    print("Отправка ответа...")
+                    result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answerid=existing_answers[question_hash])
+                else:
+                    print("Ответ уже существует:", existing_answers[question_hash])
+                    print("Отправка ответа...")
+                    result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=existing_answers[question_hash])
+                print(answer_is_correct(result))
+                if page_id==pages['pages'][page_count-1]['page']['id']:
+                    response = session.post(f"{domainname}/mod/lesson/view.php",data={
+                        'id': lecture_id,
+                        'pageid':  -9,
+                        'sesskey': sesskey,
+                        'jumpto': -1
+                    })
+                print()
                 continue
-
             if qtype == 3:
-                soup = BeautifulSoup(page_details['pagecontent'], 'html.parser')
-                answer_options = soup.find_all('div', class_='answeroption')
-
-                answers = []
-                for idx, option in enumerate(answer_options):
-                    answer_text = option.find('span', class_='filter_mathjaxloader_equation').text.strip()
-                    print(f"{idx + 1}. {answer_text}")
-                    answers.append(answer_text)
-
+                answer_options = soup_pagecontent.find_all('div', class_='answeroption')
+                answers = get_answer_options(soup_pagecontent)
+                for idx, option in enumerate(answers):
+                    print(f"{idx + 1}. {option[1]}")
                 chosen_index = int(input("Выберите номер ответа: "))
-                chosen_answer = answers[chosen_index - 1]
+                chosen_answer = int(answers[chosen_index - 1][0])
+                result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answerid=chosen_answer)
             else:
                 chosen_answer = input("Введите ответ: ")
-
+                result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=chosen_answer)
+            print(answer_is_correct(result))
             existing_answers[question_hash] = chosen_answer
-
+            print()
         save_answers(existing_answers)
     else:
         print("Ошибка: Нет страниц в уроке.")
