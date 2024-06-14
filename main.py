@@ -49,9 +49,8 @@ form_data['username'] = username
 form_data['password'] = password
 print("Вход в аккаунт...")
 response = session.post(login_url, data=form_data)
-
+print("Получение id пользователя...")
 site_info = get_site_info()
-
 user_id = site_info['userid']
 
 def get_lecture(lecture_id: int):
@@ -185,6 +184,7 @@ def answer_is_correct(answer_page: str):
         if result:
             print(result.text.strip())
         return True
+print()
 saved_lectures = load_answers()
 if len(sys.argv)>1:
     lecture_id = int(sys.argv[1])
@@ -301,8 +301,16 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                 existing_answers[question_hash] = {'multiple': multiple, 'answers': chosen_answers}
             else:
                 print("Ваш ответ не будет сохранен")
+            if page_id==pages['pages'][page_count-2]['page']['id']:
+                response = session.post(f"{domainname}/mod/lesson/view.php",data={
+                    'id': lecture_id,
+                    'pageid':  -9,
+                    'sesskey': sesskey,
+                    'jumpto': -1
+                })
             print()
-        save_answers({lecture_id:{'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}})
+        saved_lectures[lecture_id] = {'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}
+        save_answers(saved_lectures)
         grades = get_grades(course_id=course_id)
         new_grade = list(filter(lambda grade: grade['id']==int(lecture_id), grades))[0]
         if new_grade['grade']!=current_grade['grade']:
