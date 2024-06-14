@@ -184,17 +184,17 @@ def answer_is_correct(answer_page: str):
         if result:
             print(result.text.strip())
         return True
-print()
+
 saved_lectures = load_answers()
 courses_grades = {}
 if len(sys.argv)>1:
     lecture_id = int(sys.argv[1])
 else:
-    
     ids = list(saved_lectures.keys())
     ids_count = len(ids)
     unique_courses_ids = set([saved_lectures[key]['courseid'] for key in saved_lectures])
     print("Получение оценок...")
+    print()
     for course_id in unique_courses_ids:
         courses_grades[course_id] = get_grades(course_id=course_id)
     print("Доступные лекции")
@@ -203,14 +203,12 @@ else:
         print(f'{idx+1}.', saved_lectures[lecture_id]['name'], f'({lecture_id})', "- оценка",lecture_grade['grade'])
     while True:
         lecture_index = input("Выберите лекцию: ")
-        if not lecture_index.isdigit() or 1>int(lecture_index)>ids_count:
+        if not lecture_index.isdigit() or 1<    int(lecture_index)>ids_count:
             print('Некорректный выбор')
+            continue
         break
     lecture_id = ids[int(lecture_index)-1]
-    
-    
-        
-
+print()
 lecture = get_lecture(lecture_id)
 if 'exception' in lecture:
     print("Ошибка получения лекции с сайта:",lecture['message'])
@@ -316,6 +314,8 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
         if new_grade['grade']!=current_grade['grade']:
             print("Оценка после выполнения скрипта:", new_grade['grade'])
             print("Разница в оценках:", round(new_grade['grade']-current_grade['grade'], 2))
+        else:
+            print("Оценка до выполнения срипта и после не отличаются. Возможно произошла проблема при отправке. Прорешайте лекцию вручную")
     else:
         print("Ошибка: Нет страниц в уроке.")
 else:
