@@ -263,7 +263,8 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                     print("Ответ уже существует:", existing_answers[question_hash]['answers'][0])
                     result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=existing_answers[question_hash]['answers'][0])
                 answer_is_correct(result)
-                if page_id==pages['pages'][page_count-2]['page']['id']:
+             
+                if page_id==pages['pages'][page_count-2]['page']['id'] or page_id==pages['pages'][page_count-1]['page']['id']:
                     response = session.post(f"{domainname}/mod/lesson/view.php",data={
                         'id': lecture_id,
                         'pageid':  -9,
@@ -301,7 +302,7 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                 existing_answers[question_hash] = {'multiple': multiple, 'answers': chosen_answers}
             else:
                 print("Ваш ответ не будет сохранен")
-            if page_id==pages['pages'][page_count-2]['page']['id']:
+            if page_id==pages['pages'][page_count-2]['page']['id'] or page_id==pages['pages'][page_count-1]['page']['id']:
                 response = session.post(f"{domainname}/mod/lesson/view.php",data={
                     'id': lecture_id,
                     'pageid':  -9,
