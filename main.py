@@ -117,7 +117,7 @@ def get_lesson_page(lesson_id: int, page_id: int):
     return response.json()
 
 
-def send_answer(lecture_id: int, page_id: int, sesskey: str, answer: str=None, answerids: list[int]=None, multiple: bool=False):
+def send_answer(lecture_id: int, page_id: int, sesskey: str, answer: str=None, answerids: list[int]=None, multiple: bool=False, matching:bool=False):
     print("Отправка ответа...")
     if not answer and not answerids:
         raise Exception('No answer or answerids provided')
@@ -134,6 +134,8 @@ def send_answer(lecture_id: int, page_id: int, sesskey: str, answer: str=None, a
         else:
             data['answerid']=answerids[0]
             data['_qf__lesson_display_answer_form_multichoice_singleanswer']=1
+    elif matching:
+        data = {**data, **answer, '_qf__lesson_display_answer_form_matching':1}
     else:
         data['answer']=answer
         data['_qf__lesson_display_answer_form_shortanswer']=1
@@ -170,6 +172,16 @@ def get_answer_options(soup) -> tuple[bool, list[tuple[int, str]]]:
             answer_text = label_tag.get_text(strip=True)
             answers.append((answer_id, answer_text))
     return is_multiple, answers
+
+def get_answer_options_and_questions(soup) -> list[tuple[tuple[str,str], list[str]]]:
+    answer_options = soup.find_all('div', class_='answeroption')
+    questions = []
+    for option in answer_options:
+        question_text = option.find('label').get_text(strip=True)
+        select_tag = option.find('select')
+        choices = [choice.get_text(strip=True) for choice in select_tag.find_all('option') if choice.get('value')]
+        questions.append(((select_tag.get('name'), question_text), choices))
+    return questions
 
 def answer_is_correct(answer_page: str):
     soup = BeautifulSoup(answer_page, 'html.parser')
@@ -238,7 +250,10 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
             page_id = page['page']['id']
             page_details = get_lesson_page(lesson_id, page_id)
             qtype = page_details['page']['qtype']
-            if qtype not in (3, 8):
+            if qtype not in (3, 8, 5):
+                if qtype !=20:
+                    print("Тип вопроса не поддерживается")
+                    sys.exit(1)
                 response = session.post(f"{domainname}/mod/lesson/view.php",data={
                     'id': lecture_id,
                     'pageid': page_id,
@@ -265,6 +280,15 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                         answerids=existing_answers[question_hash]['answers'],
                         multiple=existing_answers[question_hash]['multiple']
                     )
+                elif qtype==5:
+                    saved_answers = existing_answers[question_hash]['answers']
+                    questions = get_answer_options_and_questions(soup_pagecontent)
+                    for idx, question in enumerate(questions):
+                        print(f"Пункт {idx+1}: {question[0][1]}\n")
+                        print("Ответ уже существует:", saved_answers[0][question[0][0]])
+                    result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=saved_answers[0], matching=True)
+                
+                    
                 else:
                     print("Ответ уже существует:", existing_answers[question_hash]['answers'][0])
                     result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=existing_answers[question_hash]['answers'][0])
@@ -281,32 +305,53 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                 while True:
                     text = input(f"Выберите номер{'a' if multiple else ''} ответ{'ов через запятую' if multiple else 'а'}: ")
                     numbers = text.split(',') if multiple else [text]
+                    answers_count = len(answers)
                     for number in numbers:
                         if not number.isdigit():
                             print(f"Некорректный ввод.{' ('+number+')'}")
                             continue
                         chosen_index = int(number)
-                        if chosen_index<1 or chosen_index>len(answers):
+                        if 1>chosen_index>answers_count:
                             print(f"Некорректный ввод.{' ('+number+')'}")
                             continue
                         chosen_answers.append(answers[chosen_index - 1][0] if multiple else int(answers[chosen_index - 1][0]))
                     break
                 result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answerids=chosen_answers, multiple=multiple)
+            elif qtype==5:
+                questions = get_answer_options_and_questions(soup_pagecontent)
+                answers = {}
+                for idx, question in enumerate(questions):
+                    print(f"Пункт {idx+1}: {question[0][1]}\nВарианты ответов:")
+                    for answer_index, answer in enumerate(question[1]):
+                        print(f"{answer_index+1}) {answer}")
+                    answers_count = len(question[1])
+                    while True:
+                        str_index = input("Выберите вариант ответа:")
+                        if not str_index.isdigit() or 1>int(str_index)>answers_count:
+                            print(f"Некорректный ввод.{' ('+str_index+')'}")
+                            continue
+                        break
+                    answer = question[1][int(str_index)-1]
+                    answers[question[0][0]] = answer
+                result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=answers, matching=True)
+                chosen_answers.append(answers)
             else:
                 chosen_answer = input("Введите ответ: ")
                 result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=chosen_answer)
                 chosen_answers.append(chosen_answer)
             if answer_is_correct(result):
-                existing_answers[question_hash] = {'multiple': multiple, 'answers': chosen_answers}
+                existing_answers[question_hash] = {'multiple': multiple, 'answers': chosen_answers, 'matching': qtype==5}
             else:
                 print("Ваш ответ не будет сохранен")
             print()
-        response = session.post(f"{domainname}/mod/lesson/view.php",data={
+        response = session.post(f"{domainname}/mod/lesson/view.php", data={
             'id': lecture_id,
             'pageid':  -9,
             'sesskey': sesskey,
             'jumpto': -1
         })
+        with open('file.html', 'w') as f:
+            f.write(response.text)
         saved_lectures[str(lecture_id)] = {'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}
         save_answers(saved_lectures)
         grades = get_grades(course_id=course_id)
