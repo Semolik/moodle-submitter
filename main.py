@@ -19,8 +19,8 @@ if not all(getenv(key) for key in ('DOMAIN', 'USERNAME', 'PASSWORD')):
     print("Ошибка: Не все необходимые переменные окружения указаны в файле .env. (DOMAIN, USERNAME, PASSWORD, TOKEN)")
     sys.exit(1)
 
-if len(sys.argv)!=2:
-    print("usage: python main.py <lecture_id>")
+if 2<len(sys.argv)>1 and not sys.argv[1].isdigit():
+    print("usage: python main.py or python main.py <lecture_id:int>")
     sys.exit(1)
 
 def get_site_info():
@@ -63,7 +63,7 @@ def get_lecture(lecture_id: int):
     })
     return response.json()
 
-def get_current_grade(course_id: int, lecture_id: int):
+def get_grades(course_id: int):
     response = requests.get(serverurl, params={
         'wstoken': token,
         'wsfunction': 'gradereport_user_get_grades_table',
@@ -72,13 +72,21 @@ def get_current_grade(course_id: int, lecture_id: int):
         'userid': user_id
     })
     grade_data = response.json()
-  
+    grades = []
     if 'tables' in grade_data and len(grade_data['tables']) > 0:
         for table in grade_data['tables']:
             for item in table['tabledata']:
-                if 'itemname' in item and f'id={lecture_id}' in item['itemname']['content']:
-                    return float(item['grade']['content'].replace(',', '.'))
-    return None
+                if 'itemname' in item and 'grade' in item:
+                    match_id = re.search(r"https://portal.edu.asu.ru/mod/lesson/grade.php\?id=(\d+)", item['itemname']['content'])
+                    match_title = re.search(r'title=\"([^\"]*)\"', item['itemname']['content'])
+                    if match_id and match_title:
+                        grades.append({
+                            'grade': float(item['grade']['content'].replace(',', '.')),
+                            'id': int(match_id.group(1)),
+                            'name': match_title.group(1)
+                        }) 
+    return grades
+
 
 def get_lecture_data(lesson_id: int):
     response = requests.get(serverurl, params={
@@ -177,8 +185,23 @@ def answer_is_correct(answer_page: str):
         if result:
             print(result.text.strip())
         return True
-
-lecture_id = int(sys.argv[1])
+saved_lectures = load_answers()
+if len(sys.argv)>1:
+    lecture_id = int(sys.argv[1])
+else:
+    print("Доступные лекции")
+    ids = list(saved_lectures.keys())
+    ids_count = len(ids)
+    for idx, lecture_id in enumerate(ids):
+        print(f'{idx+1}.', saved_lectures[lecture_id]['name'])
+    while True:
+        lecture_index = input("Выберите лекцию:")
+        if not lecture_index.isdigit() or 1>int(lecture_index)>ids_count:
+            print('Некорректный выбор')
+        break
+    lecture_id = ids[int(lecture_index)-1]
+    
+        
 
 lecture = get_lecture(lecture_id)
 if 'exception' in lecture:
@@ -188,10 +211,12 @@ if 'exception' in lecture:
 if 'cm' in lecture and 'instance' in lecture['cm']:
     lesson_id = lecture['cm']['instance']
     lesson = get_lecture_data(lesson_id=lesson_id)
-    print(lesson['lesson']['name'])
+    name = lesson['lesson']['name']
+    print("Выбранная лекция:",name)
     course_id = lesson['lesson']['course']
-    current_grade = get_current_grade(course_id=course_id, lecture_id=lecture_id)
-    print("Текущаяя оценка за лекцию:", current_grade, "\n")
+    grades = get_grades(course_id=course_id)
+    current_grade = list(filter(lambda grade: grade['id']==int(lecture_id), grades))[0]
+    print("Текущаяя оценка за лекцию:", current_grade['grade'], "\n")
     pages = get_lecture_pages(lesson_id)
     query_url = f"{domainname}/mod/lesson/view.php?id={lecture_id}&pageid={pages['pages'][0]['page']['id']}&startlastseen=no"
     response = session.get(query_url, allow_redirects=False)
@@ -200,9 +225,9 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
     sesskey = sesskey_input.get('value')
     page_count = len(pages['pages'])
     if 'pages' in pages and page_count > 0:
-        existing_answers = load_answers()
-        answers_count = 0
-        
+        existing_answers = saved_lectures.get(str(lecture_id)) or {}
+        if 'lecture_answers' in existing_answers:
+            existing_answers=existing_answers['lecture_answers']
         for page in pages['pages']:
             page_id = page['page']['id']
             page_details = get_lesson_page(lesson_id, page_id)
@@ -235,10 +260,10 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                         multiple=existing_answers[question_hash]['multiple']
                     )
                 else:
-                    print("Ответ уже существует:", existing_answers[question_hash])
+                    print("Ответ уже существует:", existing_answers[question_hash]['answers'][0])
                     result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=existing_answers[question_hash]['answers'][0])
                 answer_is_correct(result)
-                if page_id==pages['pages'][page_count-1]['page']['id']:
+                if page_id==pages['pages'][page_count-2]['page']['id']:
                     response = session.post(f"{domainname}/mod/lesson/view.php",data={
                         'id': lecture_id,
                         'pageid':  -9,
@@ -247,12 +272,13 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                     })
                 print()
                 continue
+            chosen_answers = []
+            multiple = False
             if qtype == 3:
                 answer_options = soup_pagecontent.find_all('div', class_='answeroption')
                 multiple, answers = get_answer_options(soup_pagecontent)
                 for idx, option in enumerate(answers):
                     print(f"{idx + 1}. {option[1]}")
-                chosen_answers = []
                 while True:
                     text = input(f"Выберите номер{'a' if multiple else ''} ответ{'ов через запятую' if multiple else 'а'}: ")
                     numbers = text.split(',') if multiple else [text]
@@ -276,11 +302,12 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
             else:
                 print("Ваш ответ не будет сохранен")
             print()
-        save_answers(existing_answers)
-        new_grade = get_current_grade(course_id=course_id, lecture_id=lecture_id)
-        if new_grade!=current_grade:
-            print("Оценка после выполнения скрипта:", new_grade)
-            print("Разница в оценках:", round(new_grade-current_grade, 2))
+        save_answers({lecture_id:{'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}})
+        grades = get_grades(course_id=course_id)
+        new_grade = list(filter(lambda grade: grade['id']==int(lecture_id), grades))[0]
+        if new_grade['grade']!=current_grade['grade']:
+            print("Оценка после выполнения скрипта:", new_grade['grade'])
+            print("Разница в оценках:", round(new_grade['grade']-current_grade['grade'], 2))
     else:
         print("Ошибка: Нет страниц в уроке.")
 else:
