@@ -251,9 +251,6 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
             page_details = get_lesson_page(lesson_id, page_id)
             qtype = page_details['page']['qtype']
             if qtype not in (3, 8, 5):
-                if qtype !=20:
-                    print("Тип вопроса не поддерживается")
-                    sys.exit(1)
                 response = session.post(f"{domainname}/mod/lesson/view.php",data={
                     'id': lecture_id,
                     'pageid': page_id,
@@ -350,8 +347,6 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
             'sesskey': sesskey,
             'jumpto': -1
         })
-        with open('file.html', 'w') as f:
-            f.write(response.text)
         saved_lectures[str(lecture_id)] = {'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}
         save_answers(saved_lectures)
         grades = get_grades(course_id=course_id)
