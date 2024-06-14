@@ -186,20 +186,28 @@ def answer_is_correct(answer_page: str):
         return True
 print()
 saved_lectures = load_answers()
+courses_grades = {}
 if len(sys.argv)>1:
     lecture_id = int(sys.argv[1])
 else:
-    print("Доступные лекции")
+    
     ids = list(saved_lectures.keys())
     ids_count = len(ids)
+    unique_courses_ids = set([saved_lectures[key]['courseid'] for key in saved_lectures])
+    print("Получение оценок...")
+    for course_id in unique_courses_ids:
+        courses_grades[course_id] = get_grades(course_id=course_id)
+    print("Доступные лекции")
     for idx, lecture_id in enumerate(ids):
-        print(f'{idx+1}.', saved_lectures[lecture_id]['name'])
+        lecture_grade = list(filter(lambda grade: grade['id']==int(lecture_id), courses_grades[saved_lectures[lecture_id]['courseid']]))[0]
+        print(f'{idx+1}.', saved_lectures[lecture_id]['name'], f'({lecture_id})', "- оценка",lecture_grade['grade'])
     while True:
-        lecture_index = input("Выберите лекцию:")
+        lecture_index = input("Выберите лекцию: ")
         if not lecture_index.isdigit() or 1>int(lecture_index)>ids_count:
             print('Некорректный выбор')
         break
     lecture_id = ids[int(lecture_index)-1]
+    
     
         
 
@@ -214,7 +222,7 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
     name = lesson['lesson']['name']
     print("Выбранная лекция:",name)
     course_id = lesson['lesson']['course']
-    grades = get_grades(course_id=course_id)
+    grades = courses_grades.get(course_id) or get_grades(course_id=course_id)
     current_grade = list(filter(lambda grade: grade['id']==int(lecture_id), grades))[0]
     print("Текущаяя оценка за лекцию:", current_grade['grade'], "\n")
     pages = get_lecture_pages(lesson_id)
@@ -263,14 +271,6 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                     print("Ответ уже существует:", existing_answers[question_hash]['answers'][0])
                     result = send_answer(lecture_id=lecture_id, page_id=page_id, sesskey=sesskey, answer=existing_answers[question_hash]['answers'][0])
                 answer_is_correct(result)
-             
-                if page_id==pages['pages'][page_count-2]['page']['id'] or page_id==pages['pages'][page_count-1]['page']['id']:
-                    response = session.post(f"{domainname}/mod/lesson/view.php",data={
-                        'id': lecture_id,
-                        'pageid':  -9,
-                        'sesskey': sesskey,
-                        'jumpto': -1
-                    })
                 print()
                 continue
             chosen_answers = []
@@ -302,15 +302,14 @@ if 'cm' in lecture and 'instance' in lecture['cm']:
                 existing_answers[question_hash] = {'multiple': multiple, 'answers': chosen_answers}
             else:
                 print("Ваш ответ не будет сохранен")
-            if page_id==pages['pages'][page_count-2]['page']['id'] or page_id==pages['pages'][page_count-1]['page']['id']:
-                response = session.post(f"{domainname}/mod/lesson/view.php",data={
-                    'id': lecture_id,
-                    'pageid':  -9,
-                    'sesskey': sesskey,
-                    'jumpto': -1
-                })
             print()
-        saved_lectures[lecture_id] = {'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}
+        response = session.post(f"{domainname}/mod/lesson/view.php",data={
+            'id': lecture_id,
+            'pageid':  -9,
+            'sesskey': sesskey,
+            'jumpto': -1
+        })
+        saved_lectures[str(lecture_id)] = {'lecture_answers': existing_answers, 'name':name, 'courseid': course_id}
         save_answers(saved_lectures)
         grades = get_grades(course_id=course_id)
         new_grade = list(filter(lambda grade: grade['id']==int(lecture_id), grades))[0]
